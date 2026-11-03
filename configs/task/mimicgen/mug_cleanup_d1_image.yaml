@@ -1,0 +1,46 @@
+name: ${task.task_name}_${task.modality}
+benchmark: mimicgen_core
+task_name: mug_cleanup_d1
+modality: image
+
+observation:
+  state_keys:
+    - states
+  rgb_keys:
+    - rgb
+  shape_meta:
+    obs:
+      states:
+        shape:
+          - 9
+        type: low_dim
+      rgb:
+        shape:
+          - 6
+          - 84
+          - 84
+        type: rgb
+    action:
+      shape:
+        - ${task.action.model_dim}
+
+action:
+  axis_angle_dim: 7
+  rotation6d_dim: 10
+  model_dim: ${eval:'${task.action.rotation6d_dim} if "${action.rotation_rep}" == "rotation_6d" else ${task.action.axis_angle_dim}'}
+
+data:
+  hdf5_path: ${oc.env:MIMICGEN_DATA_ROOT}/core/mug_cleanup_d1.hdf5
+  zarr_path: ${oc.env:MIMICGEN_DATA_ROOT}/core/mug_cleanup_d1_image${action.zarr_suffix}.zarr
+
+training:
+  num_epochs: 800
+  save_every: 25
+  val_every: 1
+  sample_every: 5
+
+evaluation:                 # closed-loop rollouts (scripts/eval_checkpoints.py)
+  kind: robomimic_image
+  dataset_path: ${task.data.hdf5_path}
+  test_start_seed: 100000
+  max_steps: 500

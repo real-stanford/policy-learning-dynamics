@@ -1,0 +1,62 @@
+# Training config for the joint (obs, action) generator. Copied from
+# default_dynamics.yaml (the generic standalone-model trainer reads these blocks); tuned
+# for dense checkpointing across the t_gen..t_mem band and slower memorization.
+name: default_joint_generator
+
+optimizer:
+  type: adamw
+  lr: 1.0e-4
+  betas:
+    - 0.95
+    - 0.999
+  eps: 1.0e-8
+  weight_decay: 1.0e-4    # raised vs dynamics (1e-6) to slow memorization / widen the band
+
+dataloader:
+  batch_size: 256
+  num_workers: 4
+  shuffle: true
+  pin_memory: true
+  persistent_workers: true
+
+validation:
+  batch_size: 256
+  num_workers: 4
+  shuffle: false
+  pin_memory: true
+  persistent_workers: true
+
+training:
+  seed: 42
+  resume: true
+  num_epochs: 1000
+  lr_scheduler: cosine
+  lr_warmup_steps: 500
+  gradient_accumulate_every: 1
+  use_ema: true
+  save_every: 25          # dense epoch_XXXX.ckpt for the checkpoint mixture (the mug generator run used 25)
+  val_every: 1
+  max_train_steps: null
+  max_val_steps: null
+  tqdm_interval_sec: 1.0
+
+ema:
+  update_after_step: 0
+  inv_gamma: 1.0
+  power: 0.75
+  min_value: 0.0
+  max_value: 0.9999
+
+accelerate:
+  split_batches: true
+  ddp_broadcast_buffers: false
+  ddp_find_unused_parameters: false
+  ddp_static_graph: false
+
+logging:
+  wandb:
+    enabled: true
+    project: robot_policy_overfitting_study_joint_gen
+    group: ${task.task_name}
+    run_id: ${runtime.run_name}
+    run_name: ${runtime.run_name}

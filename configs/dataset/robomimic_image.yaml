@@ -1,0 +1,34 @@
+name: robomimic_image
+
+source:
+  benchmark: mimicgen_core
+  source_format: robomimic_hdf5
+  canonical_format: zarr
+  hdf5_path: ${task.data.hdf5_path}
+  zarr_path: ${task.data.zarr_path}
+
+sampling:
+  horizon: ${model.rollout.horizon}
+  n_obs_steps: ${model.rollout.n_obs_steps}
+  n_action_steps: ${model.rollout.n_action_steps}
+  pad_before: ${model.rollout.pad_before}
+  pad_after: ${model.rollout.pad_after}
+
+processing:
+  action_pose_repr: ${action.action_pose_repr}
+  rotation_rep: ${action.rotation_rep}
+  val_ratio: 0.02             # 20 of the 1000 demos are the trainer's validation split
+  ratio: 1.0
+  seed: 42
+  # Copy the whole zarr into RAM at dataset init (one parallel read, shared
+  # copy-on-write by the dataloader workers). The stores keep one file per chunk,
+  # so lazy reads from NFS cost ~60 ms/sample vs ~0.5 ms from memory.
+  in_memory: true
+  max_train_episodes: 200     # seeded subset of the non-validation demos
+  episode_include_path: null  # explicit train-episode JSON list; mutually exclusive
+                              # with max_train_episodes / ratio<1
+
+observations:
+  mode: rgb+lowdim
+  state_keys: ${task.observation.state_keys}
+  rgb_keys: ${task.observation.rgb_keys}

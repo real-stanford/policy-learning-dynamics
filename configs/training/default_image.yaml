@@ -1,0 +1,89 @@
+name: default_image
+
+optimizer:
+  type: adamw
+  lr: 1.0e-4
+  betas:
+    - 0.95
+    - 0.999
+  eps: 1.0e-8
+  weight_decay: 1.0e-6
+
+dataloader:
+  batch_size: 512   # GLOBAL batch (accelerate.split_batches: true), split across ranks
+  num_workers: -1   # auto: usable cores / num_processes (1 core headroom, capped 16). Set >=0 to pin.
+  shuffle: true
+  pin_memory: true
+  persistent_workers: true
+
+validation:
+  batch_size: 512
+  num_workers: -1   # auto (see dataloader.num_workers)
+  shuffle: false
+  pin_memory: true
+  persistent_workers: true
+
+training:
+  seed: 42
+  resume: true                  # resume from checkpoints/last.ckpt when present
+  num_epochs: ${task.training.num_epochs}
+  lr_scheduler: cosine
+  lr_warmup_steps: 500
+  gradient_accumulate_every: 1
+  use_ema: true
+  save_every: ${task.training.save_every}     # epoch_XXXX.ckpt cadence
+  val_every: ${task.training.val_every}
+  sample_every: ${task.training.sample_every}
+  max_train_steps: null
+  max_val_steps: null
+  tqdm_interval_sec: 1.0
+
+ema:
+  update_after_step: 0
+  inv_gamma: 1.0
+  power: 0.75
+  min_value: 0.0
+  max_value: 0.9999
+
+accelerate:
+  split_batches: true
+  ddp_broadcast_buffers: false
+  ddp_find_unused_parameters: false
+  ddp_static_graph: false
+  pg_timeout_seconds: 7200   # process-group collective timeout (default 600s is too tight)
+
+compile:
+  enabled: false
+  mode: reduce-overhead
+  fullgraph: false
+  dynamic: false
+  cudagraphs: false
+
+# Policy training with distillation of jointly generated (image, state, action) samples
+# from a trained joint generator (scripts/training/joint_generator_image.py). After a
+# warmup ramp, a fraction of each batch's rows is replaced by samples drawn equally from
+# the listed generator checkpoints and trained with the normal diffusion BC loss.
+# The generator outputs rgb in RAW [0,1] and states/action RAW; the policy re-normalizes
+# them with its own normalizer, so generated and real rows train identically.
+# Disabled by default -> standard behaviour cloning.
+jointaug_w_oa_joint_model:
+  enabled: false
+  oa_model_dir: null          # <generator run>/checkpoints
+  ckpt_indices: []            # epoch_XXXX.ckpt indices to mix, e.g. [200,300,400,500,100]
+  max_noisy_fraction: 0.5     # max fraction of each batch that is generated (after the ramp)
+  start_epochs: 0             # clean-only (normal BC) before this epoch; ramp begins here
+  ramp_epochs: 300            # linearly ramp the generated fraction 0 -> max from start_epochs to here
+  num_inference_steps: 100    # DDIM steps per generation (generator trains with 1000 timesteps;
+                              # <=24 steps are badly off-distribution, 100 = max fidelity)
+  periodic_resampling: true   # true: generate a POOL once per refresh_interval epochs and draw
+                              # from it (batched, ~refresh_interval x cheaper); false: regenerate
+                              # fresh rows every step. Pool auto-sized to one epoch of rows/rank.
+  refresh_interval: 15        # epochs between pool refreshes (only with periodic_resampling)
+
+logging:
+  wandb:
+    enabled: true
+    project: robot_policy_overfitting_study
+    group: ${task.task_name}_${task.modality}
+    run_id: ${runtime.run_name}
+    run_name: ${task.name}_${runtime.run_name}

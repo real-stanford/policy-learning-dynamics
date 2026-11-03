@@ -1,0 +1,37 @@
+name: hammer_cleanup_d1_lowdim
+benchmark: mimicgen_core
+task_name: hammer_cleanup_d1
+modality: lowdim
+
+observation:
+  notes:
+    - Source of truth for MimicGen observation keys is envs/task_registry.py.
+    - Keep this task config aligned with the registry entry for task_name.
+  state_keys:
+    - object
+    - robot0_eef_pos
+    - robot0_eef_quat
+    - robot0_gripper_qpos
+  rgb_keys: []
+  obs_dim: 37
+
+action:
+  axis_angle_dim: 7
+  rotation6d_dim: 10
+  model_dim: ${eval:'${task.action.rotation6d_dim} if "${action.rotation_rep}" == "rotation_6d" else ${task.action.axis_angle_dim}'}
+
+data:
+  hdf5_path: ${oc.env:MIMICGEN_DATA_ROOT}/core/hammer_cleanup_d1.hdf5
+  zarr_path: ${oc.env:MIMICGEN_DATA_ROOT}/core/hammer_cleanup_d1_lowdim${action.zarr_suffix}.zarr
+
+training:
+  num_epochs: 800
+  save_every: 50
+  val_every: 1
+  sample_every: 5
+
+evaluation:                 # closed-loop rollouts (scripts/eval_checkpoints.py)
+  kind: robomimic_lowdim
+  dataset_path: ${task.data.hdf5_path}
+  test_start_seed: 100000
+  max_steps: 500

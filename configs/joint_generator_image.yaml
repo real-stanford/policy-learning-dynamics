@@ -1,0 +1,42 @@
+# Joint (image-obs, state, action) generator (scripts/training/joint_generator_image.py).
+defaults:
+  - /dataset: robomimic_image           # CanonicalImageDataset (nested {rgb, states} obs)
+  - /model: joint_image_oa_dit
+  - /training: default_joint_generator
+  - /action: absolute_rotation6d
+  - /task: mimicgen/mug_cleanup_d1_image
+  - _self_
+
+experiment:
+  name: joint_generator_image
+  benchmark: ${task.benchmark}
+  task_name: ${task.task_name}
+  modality: ${task.modality}
+  script: scripts/training/joint_generator_image.py
+
+runtime:
+  training_root: ${oc.env:TRAINING_ROOT}
+  datetime_stamp: ${now:%Y.%m.%d_%H.%M.%S}
+  exp_suffix: null
+  run_name: ${run_name:${runtime.datetime_stamp},${runtime.exp_suffix}}
+  output_dir: ${runtime.training_root}/${task.name}_joint_gen_img/${runtime.run_name}
+
+# DATA-SPLIT CONTRACT (no eval leakage): val_ratio + max_train_episodes + seed are inherited
+# UNCHANGED from the shared /dataset group, the SAME group the image policy uses, so the
+# generator trains on exactly the policy's demos. Its samples are later mixed into policy
+# training; if it had trained on the policy's held-out episodes it would leak them in.
+
+checkpoint:
+  topk:
+    monitor_key: val_loss
+    mode: min
+    k: 1
+    format_str: "epoch={epoch:04d}-val_loss={val_loss:.6f}.ckpt"
+  save_last_ckpt: true    # last.ckpt resume point (the original generator runs kept it)
+
+hydra:
+  run:
+    dir: ${runtime.output_dir}
+  sweep:
+    dir: ${runtime.training_root}/${task.name}_joint_gen_img
+    subdir: ${runtime.run_name}

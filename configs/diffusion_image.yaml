@@ -1,0 +1,43 @@
+# Behaviour cloning of an image diffusion policy (scripts/training/pretrain_image.py).
+defaults:
+  - /dataset: robomimic_image
+  - /model: diffusion_unet_image
+  - /training: default_image
+  - /action: absolute_rotation6d
+  - /task: mimicgen/threading_d2_image
+  - _self_
+
+experiment:
+  name: diffusion_image
+  benchmark: ${task.benchmark}
+  task_name: ${task.task_name}
+  modality: ${task.modality}
+  script: scripts/training/pretrain_image.py
+
+runtime:
+  training_root: ${oc.env:TRAINING_ROOT}
+  datetime_stamp: ${now:%Y.%m.%d_%H.%M.%S}
+  exp_suffix: null
+  run_name: ${run_name:${runtime.datetime_stamp},${runtime.exp_suffix}}
+  output_dir: ${runtime.training_root}/${task.name}/${runtime.run_name}
+
+smoke:                 # --smoke: two tiny epochs
+  enabled: false
+  num_epochs: 2
+  max_train_steps: 2
+  max_val_steps: 2
+
+checkpoint:
+  topk:
+    monitor_key: val_loss
+    mode: min
+    k: 1
+    format_str: "epoch={epoch:04d}-val_loss={val_loss:.6f}.ckpt"
+  save_last_ckpt: false   # last.ckpt (resume point) is written every save_every epochs when true
+
+hydra:
+  run:
+    dir: ${runtime.output_dir}
+  sweep:
+    dir: ${runtime.training_root}/${task.name}
+    subdir: ${runtime.run_name}

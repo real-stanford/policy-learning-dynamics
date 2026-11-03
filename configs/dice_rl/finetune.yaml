@@ -1,0 +1,160 @@
+# DICE-RL residual finetuning of a frozen diffusion-policy checkpoint.
+#
+# Everything task-specific (task, action representation, encoder, scheduler,
+# normalizer, expert split, episode length) is inherited from the checkpoint's
+# own pickled config; this file only holds the RL recipe. Defaults follow
+# dice-rl cfg/robomimic/finetune/square/ft_distill_residual_diffusion_unet_img.yaml
+# except where noted (*).
+#
+# Launch (single GPU):
+#   python -m scripts.dice_rl.finetune base_policy.checkpoint=<epoch_XXXX.ckpt>
+# Launch (N GPUs, same learning dynamics: env.n_envs and train.batch_size are
+# GLOBAL and split across ranks):
+#   accelerate launch --multi_gpu --num_processes N --num_machines 1 \
+#     --mixed_precision no --dynamo_backend no -m scripts.dice_rl.finetune \
+#     base_policy.checkpoint=<epoch_XXXX.ckpt>
+
+base_policy:
+  checkpoint: null                # REQUIRED: <run_dir>/checkpoints/epoch_XXXX.ckpt of an image BC run
+  state_key: ema_state          # weights used by the repo's eval
+  num_inference_steps: 10       # (*) DDIM steps of the frozen base policy (eval uses 10)
+  ddim_eta: 0.0                 # must be 0 for pi_pre(s, z) to be deterministic
+  autocast: bf16                # null | bf16 -- bf16 speeds the frozen UNet ~1.4x
+
+env:
+  n_envs: 64                     # GLOBAL parallel envs (dice-rl n_envs); split across ranks
+  max_episode_steps: null       # null -> checkpoint task.evaluation.max_steps (400)
+  success_steps_before_termination: 1
+  seed: 42                      # env reset seeds: seed + rank * 1e6 + episode counter (random layouts)
+
+expert:                         # RLPD: expert = the checkpoint's own pretraining split
+  enabled: true
+  cache_dir: ${oc.env:TRAINING_ROOT}/dice_rl_expert_cache
+  encode_batch_size: 256
+  # MimicGen demos that never trip the reward checker (threading_d2: 4/1000, none in
+  # the 200-demo split; mug/hammer ~3%). No dice-rl precedent (robomimic PH demos all
+  # succeed): force_last = last step is the success (repo converter convention) |
+  # zero = zero-reward terminal (what dice-rl's code would do) | drop = exclude.
+  no_success_demos: force_last
+  n_step: 3
+  bootstrap_chunks: 1           # dice-rl's expert target: bootstrap at s + H with gamma^n_step
+                                # (agent/dataset/sequence.py:374). Systematically pessimistic; in the
+                                # 2026-08-28 threading ablations it kept Q on the MC return (0.50 vs 0.48
+                                # at 800 it) while the consistent s + n_step*H (null) drifted (0.70 vs 0.45).
+  use_adaptive_ratio: true
+  ratio: 0.3                    # fixed ratio when use_adaptive_ratio=false
+  adaptive_start: 0.5
+  adaptive_end: 0.1
+  adaptive_steps: 10000         # iterations
+
+replay:
+  capacity_frames: 3000000      # PER RANK, frames (>= chunks); ~2 GB at feature dim 521
+  n_step: 3
+  bootstrap_on_truncation: false  # dice-rl: time-limit truncation is terminal (no bootstrap)
+  obs_dtype: float32            # float16 halves the frame store
+
+model:
+  actor_hidden_dims: [1024, 1024, 1024]
+  critic_hidden_dims: [1024, 1024, 1024]
+  activation_type: GELU
+  use_layernorm: true
+  actor_zero_init_last_layer: false   # true -> r_theta = 0 at init (dice-rl: random init)
+  clip_q: [0,1]                        # e.g. [0, 1]: clamp the bootstrapped next-state value
+                                      # (true Q in [0,1] with one unit terminal reward); dice-rl dev knob
+  critic_ensemble_size: 10
+  q_depends_on_noise: false
+  td_loss: mse
+  bc_loss_weight: 200.0
+  use_q_normalization: true
+  num_multi_z_for_actor_loss: 1     # (*) ce-rl 16; K base-policy chains per state
+  num_next_noise_samples: 1         # (*) dice-rl 4; K' chains per next state
+  condition_residual_on_base_action: false
+  disable_q_loss_for_expert_data: true
+  disable_td_loss_for_expert_data: true
+  always_retain_bc_loss_for_expert_data: true
+  use_soft_q_filtering: false
+  q_filtering_warmup_steps: 2000
+  q_underestimation_threshold: -0.5
+  replay_flow_warmup_steps: 400    # single-z exploration before this iteration
+  asymmetric_critic:              # (*) asymmetric actor-critic: the TRAINING-TIME critic reads the
+    enabled: false                # simulator's lowdim state (where threading's value signal provably
+    lowdim_task: null             # survives) while policy/actor act from images unchanged. Set
+                                  # lowdim_task to e.g. mimicgen/threading_d2_lowdim (provides the
+                                  # state keys, dim and expert zarr).
+    state_zarr: null              # optional explicit lowdim zarr path for expert frames (else derived)
+    actor_on_state: false         # true -> the residual conditions ENTIRELY on the standardized
+                                  # lowdim state, r(state, z) — the lowdim-run actor riding the
+                                  # image base (executed policy then needs sim state at eval time)
+  # (*) DICE+ knobs from the "Real World RL Improvement" slides (8/20-9/10/26). Both default
+  # off = byte-identical to the pre-knob implementation (no extra params, RNG or storage).
+  critic_next_state:              # "Q next-state prediction" (auxiliary only; no pre-training):
+    enabled: false                # each critic member also predicts the state ONE CHUNK ahead in
+    weight: 1.0                   # the critic's OWN cond representation (asymmetric critic ->
+                                  # standardized lowdim state; plain -> pooled features), MSE added
+                                  # to the TD loss (all rows).
+  expert_residual_imitation:      # residual imitation loss on EXPERT rows, always on (no Q-filter):
+    enabled: false                # ||r(s,z) - (a_demo - base(s,z))||^2 == ||(base + r) - a_demo||^2
+    weight: 200.0                 # (slides used 100, tuned on transport; retune for mimicgen).
+                                  # The bc term ||r||^2 stays on everywhere, unchanged.
+
+train:
+  num_train_iters: 80000       # iterations = one executed chunk per env
+  batch_size: 256               # GLOBAL batch per gradient step; split across ranks
+  gamma: 0.99
+  tau: 0.01
+  update_freq: 1
+  gradient_steps: 40
+  actor_lr: 1.0e-4
+  critic_lr: 1.0e-4
+  actor_weight_decay: 1.0e-5
+  critic_weight_decay: 1.0e-5
+  use_lr_scheduler: true
+  lr_scheduler:
+    first_cycle_steps: 1000
+    warmup_steps: 10
+    min_lr: 1.0e-6
+  actor_update_freq: 2
+  critic_target_update_freq: 2
+  max_grad_norm: 1.0
+  online_explore_strategy: max_q_min   # standard | max_q_min | max_q_std | max_q_std_filtered_by_min
+  num_exploration_samples: 16
+  log_q_overestimation: true
+  success_window: 100           # running success rate over the last N episodes (all ranks)
+  log_freq: 10                  # iterations
+  save_freq: 10000000               # iterations
+  resume_from: null             # dice_rl checkpoint (.pt) to restore model/optimizer state
+
+logging:
+  wandb:
+    enabled: true
+    project: robot_policy_overfitting_study_dice_rl
+    group: ${ckpt_task:${base_policy.checkpoint}}
+    run_id: ${runtime.run_name}
+    run_name: ${runtime.run_name}
+
+smoke:                          # --smoke: tiny end-to-end run
+  enabled: false
+  num_train_iters: 12
+  n_envs: 2
+  max_episode_steps: 24
+  gradient_steps: 1
+  batch_size: 16
+  log_freq: 1
+  save_freq: 6
+  num_exploration_samples: 2
+  replay_flow_warmup_steps: 4
+  q_filtering_warmup_steps: 4
+  adaptive_steps: 8
+
+runtime:
+  training_root: ${oc.env:TRAINING_ROOT}
+  datetime_stamp: ${now:%Y.%m.%d_%H.%M.%S}
+  exp_suffix: null
+  run_name: ${run_name:${runtime.datetime_stamp},${runtime.exp_suffix}}
+  output_dir: ${runtime.training_root}/dice_rl/${ckpt_task:${base_policy.checkpoint}}/${runtime.run_name}
+
+hydra:
+  run:
+    dir: ${runtime.output_dir}
+  job:
+    chdir: false

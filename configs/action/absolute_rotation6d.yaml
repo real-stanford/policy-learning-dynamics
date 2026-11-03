@@ -1,0 +1,9 @@
+name: absolute_rotation6d
+
+action_pose_repr: absolute
+rotation_rep: rotation_6d
+zarr_suffix: "_abs"
+
+notes:
+  - Convert absolute rotational action components to rotation_6d during dataset conversion.
+  - The model should see the converted action dimensionality directly.

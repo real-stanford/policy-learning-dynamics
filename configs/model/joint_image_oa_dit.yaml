@@ -1,0 +1,43 @@
+# High-fidelity joint (image, state, action) generative model -- dual-stream, one shared
+# diffusion process with v-prediction. Image stream = conv U-Net (skip connections);
+# action+state stream = DiT; MM-DiT bridge couples them via joint self-attention at the
+# bottleneck. Models p(rgb, states, action) of the image policy window.
+name: joint_image_oa_dit
+
+# Window geometry (the dataset's sampling block reads these).
+rollout:
+  horizon: 8
+  n_obs_steps: 1
+  n_action_steps: 8
+  pad_before: 1
+  pad_after: 7
+
+arch:
+  d_model: 384            # shared token width (DiT backbone + image bottleneck tokens)
+  num_layers: 6           # MM-DiT bridge blocks (joint image<->action self-attention)
+  num_heads: 6            # DiT attention heads
+  time_embed_dim: 256     # shared timestep embedding (FiLM for conv, adaLN for DiT)
+  unet_channels: [96, 192, 384]   # image U-Net channels at 84 / 42 / 21
+  num_res_blocks: 2       # ResBlocks per U-Net resolution level (ADM/EDM-style depth for fidelity)
+  num_attn_heads: 6       # heads for the 21x21 bottleneck self-attention
+  dropout: 0.1            # slows memorization -> widens the t_gen..t_mem band
+  # Per-modality loss weights on the v-target MSE (each term is a MEAN -> O(1) regardless of
+  # element count; do NOT upweight img toward the 42336/80 element ratio). 1.0 = balanced.
+  img_loss_weight: 1.0
+  state_loss_weight: 1.0
+  action_loss_weight: 1.0
+
+# Diffusion schedule. v-prediction (big fidelity gain over epsilon; stays in diffusers DDIM).
+# num_train_timesteps=1000 (the image-fidelity standard; 100 is too coarse at the low-noise
+# end where fine detail is added). Sample with DDIM at num_inference_steps.
+scheduler:
+  type: ddim
+  num_train_timesteps: 1000
+  num_inference_steps: 100
+  beta_start: 0.0001
+  beta_end: 0.02
+  beta_schedule: squaredcos_cap_v2
+  clip_sample: true
+  prediction_type: v_prediction
+  set_alpha_to_one: true
+  steps_offset: 0
