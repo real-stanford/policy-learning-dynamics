@@ -22,7 +22,7 @@ MimicGen demonstrations. We train on 200 of them and keep the remaining 800 as a
 - [4. Coverage-reliability checkpoint selection](#4-coverage-reliability-checkpoint-selection)
 - [5. Residual RL finetuning](#5-residual-rl-finetuning)
 - [Starting from raw MimicGen data](#starting-from-raw-mimicgen-data)
-- [Layout and conventions](#layout-and-conventions)
+- [Layout](#layout)
 
 ## Setup
 
@@ -299,6 +299,7 @@ CUDA_VISIBLE_DEVICES=2,3 accelerate launch --multi_gpu --num_processes 2 --num_m
 # base = epoch 800 of the distillation run (experiment 3)
 CUDA_VISIBLE_DEVICES=4,5 accelerate launch --multi_gpu --num_processes 2 --num_machines 1 --mixed_precision no --dynamo_backend no -m scripts.dice_rl.finetune base_policy.checkpoint=pretrained_ckpts/joint_aug_ckpts/hammer_cleanup_d1_image/checkpoints/epoch_0800.ckpt env.n_envs=64 train.gradient_steps=40 model.use_q_normalization=true model.bc_loss_weight=200 model.condition_residual_on_base_action=true model.asymmetric_critic.enabled=true model.asymmetric_critic.lowdim_task=mimicgen/hammer_cleanup_d1_lowdim model.asymmetric_critic.actor_on_state=true model.critic_next_state.enabled=true model.expert_residual_imitation.enabled=false runtime.exp_suffix=hammer200img_aug_ep800_e64_ASYM_actorstate_nextstate
 ```
+</details>
 
 ## Starting from raw MimicGen data
 
@@ -345,8 +346,16 @@ scripts/release/        download_release.py (Hub -> local layout); stage_release
 tests/                  unit tests (synthetic data, CPU)
 ```
 
-## License
+If you find this codebase useful, consider citing:
 
-The code and the released checkpoints are under the MIT License (see `LICENSE`). The
-demonstrations in `bc_pretraining_data` are MimicGen data and remain under the
-[MimicGen license](https://github.com/NVlabs/mimicgen).
+```bibtex
+@article{sun2026beyond,
+  title={Beyond Validation Loss: Coverage and Reliability Dynamics in Robot Policy Pretraining},
+  author={Sun, Zhanyi and Simchowitz, Max and Song, Shuran},
+  journal={arXiv preprint arXiv:2611.01565},
+  year={2026}
+}
+```
+
+# Contact
+If you have any questions, please feel free to contact [Zhanyi Sun](mailto:zhanyis@stanford.edu). If you leave an issue, please send me an accompanying email!
